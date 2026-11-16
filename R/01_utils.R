@@ -1,14 +1,26 @@
 # ================================================================
 # 01_utils.R — Fonctions transversales, DB, helpers
 # ================================================================
+# --- Configuration base de données ---
+DB_PATH <- file.path("data", "tvd_database.sqlite")
+
+# Créer le dossier si nécessaire
+if (!dir.exists(dirname(DB_PATH))) {
+  dir.create(dirname(DB_PATH), recursive = TRUE)
+}
+
+connect_tvd_db <- function(db_path = DB_PATH) {
+  stopifnot(is.character(db_path), length(db_path) == 1)
+  DBI::dbConnect(RSQLite::SQLite(), db_path)
+}
 
 # ---- Connexion SQLite résiliente ----
-connect_tvd_db <- function() {
-  con <- DBI::dbConnect(RSQLite::SQLite(), DB_PATH)
-  tryCatch(DBI::dbGetQuery(con, "PRAGMA busy_timeout = 30000"),
-           error = function(e) { DBI::dbDisconnect(con); stop(e) })
-  con
-}
+#connect_tvd_db <- function() {
+#  con <- DBI::dbConnect(RSQLite::SQLite(), DB_PATH)
+#  tryCatch(DBI::dbGetQuery(con, "PRAGMA busy_timeout = 30000"),
+#           error = function(e) { DBI::dbDisconnect(con); stop(e) })
+#  con
+#}
 
 with_db <- function(expr) {
   con <- connect_tvd_db(); on.exit(DBI::dbDisconnect(con), add = TRUE)
