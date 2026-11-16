@@ -1,0 +1,613 @@
+---
+title: "Rapport Analytique des Maladies Tropicales Négligées"
+subtitle: "Synthèse intégrée des six produits d'information"
+author: "SOP Data App for TVD"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    theme: cosmo
+    css: un-style.css
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    number_sections: true
+    fig_caption: true
+    self_contained: true
+    df_print: paged
+params:
+  year: 2023
+  disease: !r NULL
+  country: !r NULL
+  indicator: !r NULL
+  endemic_data: !r NULL
+  numeric_data: !r NULL
+  shapefile: !r NULL
+  logo_path: "un-logo.png"
+---
+<style>
+/* Reset Bootstrap pour aspect UN pur */
+body.html_document {
+  font-family: 'Arial', 'Helvetica', sans-serif !important;
+  color: #333 !important;
+  background: #fff !important;
+}
+
+/* TOC flottant style UN */
+#TOC {
+  border-left: 3px solid #009EDB;
+  background: #F2F2F2;
+  padding: 15px;
+  font-size: 0.9em;
+}
+#TOC a { color: #17365D !important; }
+#TOC a:hover { color: #C8102E !important; }
+
+/* Titres */
+h1, h2, h3, h4 {
+  color: #17365D !important;
+  font-family: 'Arial', sans-serif !important;
+}
+h1 { border-bottom: 3px solid #009EDB; padding-bottom: 8px; }
+h2 { border-bottom: 2px solid #009EDB; padding-bottom: 5px; }
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo       = FALSE,
+  warning    = FALSE,
+  message    = FALSE,
+  fig.align  = "center",
+  fig.width  = 10,
+  fig.height = 6,
+  dpi        = 120,
+  out.width  = "100%"
+)
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+  library(scales)
+  library(flextable)
+  library(knitr)
+  library(kableExtra)
+  library(sf)
+  library(viridis)
+  library(patchwork)
+})
+
+# ---- Palette UN/OMS (fallback si utils non chargé) ----
+if (!exists("un_palette")) {
+  un_palette <- list(
+    blue = "#009EDB", navy = "#17365D", red = "#C8102E",
+    green = "#4C9F38", orange = "#FD9A24", yellow = "#FDB714",
+    grey = "#55606E", light = "#F2F2F2"
+  )
+}
+
+if (!exists("un_endemic_colors")) {
+  un_endemic_colors <- c(
+    "Yes, country is endemic (report required)" = "#C8102E",
+    "No, country is not endemic and will not report for this disease" = "#BDC3C7",
+    "No, country is known to be endemic but no surveillance system exists or data are not available" = "#FD9A24",
+    "Yes, country is not endemic but reports for surveillance/zero reporting" = "#4C9F38",
+    "Never endemic" = "#ECF0F1",
+    "not applicable" = "#FFFFFF"
+  )
+}
+
+if (!exists("theme_un")) {
+  theme_un <- function(base_size = 12) {
+    theme_minimal(base_size = base_size) +
+      theme(
+        plot.title       = element_text(face = "bold",
+                                        color = un_palette$navy,
+                                        size = base_size + 4),
+        plot.subtitle    = element_text(color = un_palette$grey,
+                                        size = base_size),
+        plot.caption     = element_text(color = un_palette$grey,
+                                        size = base_size - 2,
+                                        hjust = 0),
+        axis.title       = element_text(color = un_palette$navy),
+        legend.position  = "bottom",
+        panel.grid.minor = element_blank(),
+        strip.background = element_rect(fill = un_palette$light,
+                                        color = NA),
+        strip.text       = element_text(face = "bold",
+                                        color = un_palette$navy)
+      )
+  }
+}
+
+# ---- Récupération des données depuis les paramètres ----
+endemic_df <- params$endemic_data
+numeric_df <- params$numeric_data
+shp_obj    <- params$shapefile
+
+# Certains imports ne contiennent que des valeurs numériques et aucun statut
+# catégoriel d'endémicité ; conserver le rapport exploitable sans inventer de statut.
+if (!is.null(endemic_df) && !"endemicity_status" %in% names(endemic_df)) {
+  endemic_df$endemicity_status <- NA_character_
+}
+for (nm in c("endemic_df", "numeric_df")) {
+  current <- get(nm)
+  if (!is.null(current) && !"country" %in% names(current) && "country_iso" %in% names(current)) {
+    current$country <- current$country_iso
+    assign(nm, current)
+  }
+}
+
+# ---- Filtres actifs ----
+sel_year      <- params$year
+sel_disease   <- params$disease
+sel_country   <- params$country
+sel_indicator <- params$indicator
+
+# ---- Helper : filtre endémique ----
+filter_endemic <- function(df) {
+  if (is.null(df)) return(NULL)
+  out <- df
+  if (!is.null(sel_year))    out <- dplyr::filter(out, year == sel_year)
+  if (!is.null(sel_disease)) out <- dplyr::filter(out, disease %in% sel_disease)
+  if (!is.null(sel_country)) {
+    country_col <- if ("country_iso" %in% names(out)) "country_iso" else "country"
+    out <- dplyr::filter(out, .data[[country_col]] %in% sel_country)
+  }
+  out
+}
+
+filter_numeric <- function(df) {
+  if (is.null(df)) return(NULL)
+  out <- df
+  if (!is.null(sel_year))      out <- dplyr::filter(out, year <= sel_year)
+  if (!is.null(sel_country)) {
+    country_col <- if ("country_iso" %in% names(out)) "country_iso" else "country"
+    out <- dplyr::filter(out, .data[[country_col]] %in% sel_country)
+  }
+  if (!is.null(sel_indicator)) out <- dplyr::filter(out, indicator %in% sel_indicator)
+  out
+}
+
+# Helper flextable UN-style
+ft_un <- function(df, caption = NULL) {
+  knitr::kable(as.data.frame(df), format = "html", caption = caption,
+               escape = TRUE, table.attr = 'class="table table-striped table-hover"') |>
+    kableExtra::kable_styling(full_width = TRUE, position = "center")
+}
+
+
+
+
+```
+
+
+
+<div class="un-header">
+  <div class="un-header-brand">
+    <span class="un-logo">🌐</span>
+    <div>
+      <div class="un-org">SOP Data App for TVD</div>
+      <div class="un-dept">Programme Mondial de Lutte contre les MTN</div>
+    </div>
+  </div>
+  <div class="un-header-meta">
+    <div>Référence : TVD/RPT/`r format(Sys.Date(), "%Y")`/`r sprintf("%03d", sample(1:999, 1))`</div>
+    <div>Date : `r format(Sys.Date(), "%d %B %Y")`</div>
+  </div>
+</div>
+
+
+Résumé exécutif {-}
+::: {.un-summary}
+Ce rapport présente une synthèse analytique intégrée des indicateurs
+de surveillance des Maladies Tropicales Négligées (MTN) à partir
+des données consolidées de la plateforme TVD. Il couvre les six produits
+d'information standard : cartographie de l'endémicité, synthèses
+statistiques, détails pivot, tendances temporelles, comparaisons
+inter-pays et représentations géographiques.
+
+Filtres appliqués au présent rapport :
+
+Année : `r sel_year %||% "Toutes"`
+Maladie : `r paste(sel_disease %||% "Toutes", collapse = ", ")`
+Pays : `r paste(sel_country %||% "Tous", collapse = ", ")`
+Indicateur : `r paste(sel_indicator %||% "Tous", collapse = ", ")`
+
+:::
+
+```{r}
+
+if (!is.null(endemic_df)) {
+  df_f <- filter_endemic(endemic_df)
+  n_countries <- length(unique(df_f$country))
+  n_diseases  <- length(unique(df_f$disease))
+  n_endemic   <- sum(grepl("^Yes", df_f$endemicity_status), na.rm = TRUE)
+  pct_endemic <- round(100 * n_endemic / max(nrow(df_f), 1), 1)
+
+  cat(sprintf('
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-value">%d</div>
+    <div class="kpi-label">Pays couverts</div>
+  </div>
+  <div class="kpi-card kpi-navy">
+    <div class="kpi-value">%d</div>
+    <div class="kpi-label">Maladies surveillées</div>
+  </div>
+  <div class="kpi-card kpi-red">
+    <div class="kpi-value">%d</div>
+    <div class="kpi-label">Observations endémiques</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-value">%s%%</div>
+    <div class="kpi-label">Taux d\'endémicité</div>
+  </div>
+</div>', n_countries, n_diseases, n_endemic, pct_endemic))
+}
+
+
+```
+
+Produit 1 — Carte de chaleur de l'endémicité
+Méthodologie
+La heatmap d'endémicité croise les pays (axe vertical) avec les
+maladies (axe horizontal) pour l'année `r sel_year`. Chaque cellule est
+colorée selon le statut d'endémicité officiel déclaré par le pays à l'OMS.
+
+Visualisation
+
+```{r}
+df_hm <- filter_endemic(endemic_df)
+
+if (is.null(df_hm) || !nrow(df_hm)) {
+  cat("⚠️ *Aucune donnée d'endémicité disponible pour les filtres sélectionnés.*")
+} else {
+  ggplot(df_hm, aes(x = disease, y = country, fill = endemicity_status)) +
+    geom_tile(color = "white", linewidth = 0.3) +
+    scale_fill_manual(values = un_endemic_colors,
+                      name = "Statut d'endémicité",
+                      na.value = "#FFFFFF") +
+    labs(
+      title    = "Carte de chaleur de l'endémicité des MTN",
+      subtitle = sprintf("Année %s — %d pays × %d maladies",
+                         sel_year,
+                         length(unique(df_hm$country)),
+                         length(unique(df_hm$disease))),
+      x = NULL, y = NULL,
+      caption = "Source : Déclarations officielles OMS / GNARF"
+    ) +
+    theme_un() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+      axis.text.y = element_text(size = 8),
+      legend.text = element_text(size = 8),
+      legend.key.size = unit(0.8, "lines")
+    ) +
+    guides(fill = guide_legend(ncol = 2))
+}
+
+```
+
+Produit 2 — Synthèse statistique de l'endémicité
+Tableau de synthèse
+
+```{r}
+
+df_syn <- filter_endemic(endemic_df)
+
+if (!is.null(df_syn) && nrow(df_syn)) {
+  summary_tbl <- df_syn |>
+    mutate(is_endemic = grepl("^Yes", endemicity_status)) |>
+    group_by(disease) |>
+    summarise(
+      `Pays couverts`       = n_distinct(country),
+      `Pays endémiques`     = sum(is_endemic, na.rm = TRUE),
+      `% endémiques`        = round(100 * sum(is_endemic, na.rm = TRUE) /
+                                     n_distinct(country), 1),
+      `Statuts distincts`   = n_distinct(endemicity_status),
+      .groups = "drop"
+    ) |>
+    arrange(desc(`Pays endémiques`))
+
+  ft_un(summary_tbl,
+        caption = sprintf("Tableau 1 — Synthèse de l'endémicité par maladie (%s).",
+                          sel_year))
+} else {
+  cat("⚠️ *Données insuffisantes pour la synthèse.*")
+}
+
+
+```
+
+
+Répartition globale
+
+
+Répartition globale
+```{r}
+
+if (!is.null(df_syn) && nrow(df_syn)) {
+  df_syn |>
+    mutate(is_endemic = grepl("^Yes", endemicity_status)) |>
+    group_by(disease) |>
+    summarise(n = sum(is_endemic, na.rm = TRUE), .groups = "drop") |>
+    arrange(desc(n)) |>
+    head(15) |>
+    ggplot(aes(x = reorder(disease, n), y = n)) +
+    geom_col(fill = un_palette$red, width = 0.7) +
+    geom_text(aes(label = n), hjust = -0.2,
+              color = un_palette$navy, size = 3.5) +
+    coord_flip() +
+    labs(title = "Top 15 des MTN par nombre de pays endémiques",
+         subtitle = sprintf("Année %s", sel_year),
+         x = NULL, y = "Nombre de pays endémiques") +
+    theme_un() +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+}
+
+
+```
+
+
+#Produit 3 — Détail pivot par pays et maladie
+```{r}
+
+df_det <- filter_endemic(endemic_df)
+
+if (!is.null(df_det) && nrow(df_det)) {
+  pivot_tbl <- df_det |>
+    select(country, disease, endemicity_status) |>
+    pivot_wider(names_from = disease,
+                values_from = endemicity_status,
+                values_fn = ~ paste(unique(.x), collapse = "; "))
+
+  # Limite d'affichage pour lisibilité
+  if (ncol(pivot_tbl) > 12) {
+    pivot_tbl <- pivot_tbl[, 1:12]
+    cat("ℹ️ *Affichage limité aux 11 premières maladies pour lisibilité.*\n\n")
+  }
+
+  ft_un(head(pivot_tbl, 40),
+        caption = sprintf("Tableau 2 — Détail pivot pays × maladies (%s).",
+                          sel_year))
+} else {
+  cat("⚠️ *Aucune donnée pivot disponible.*")
+}
+
+```
+
+
+# Produit 4 — Tendance temporelle des indicateurs
+## Évolution multi-annuelle
+
+```{r}
+df_tr <- filter_numeric(numeric_df)
+
+if (is.null(df_tr) || !nrow(df_tr)) {
+  cat("⚠️ *Aucune donnée numérique pour la tendance.*")
+} else {
+  top_ind <- df_tr |>
+    group_by(indicator) |>
+    summarise(n = n(), .groups = "drop") |>
+    arrange(desc(n)) |>
+    head(6) |>
+    pull(indicator)
+
+  df_tr |>
+    filter(indicator %in% top_ind) |>
+    group_by(year, indicator) |>
+    summarise(value = sum(value, na.rm = TRUE), .groups = "drop") |>
+    ggplot(aes(x = year, y = value, color = indicator, group = indicator)) +
+    geom_line(linewidth = 1.1) +
+    geom_point(size = 2.2) +
+    scale_color_viridis_d(option = "D", end = 0.9) +
+    scale_y_continuous(labels = label_comma(big.mark = " ")) +
+    labs(
+      title = "Tendance temporelle des principaux indicateurs",
+      subtitle = sprintf("Top 6 indicateurs — jusqu'en %s", sel_year),
+      x = "Année", y = "Valeur agrégée",
+      color = NULL,
+      caption = "Source : Base analytique TVD"
+    ) +
+    theme_un() +
+    guides(color = guide_legend(nrow = 2, byrow = TRUE))
+}
+
+
+```
+
+# Table des valeurs annuelles
+
+
+```{r}
+if (!is.null(df_tr) && nrow(df_tr)) {
+  trend_tbl <- df_tr |>
+    group_by(year, indicator) |>
+    summarise(valeur = sum(value, na.rm = TRUE), .groups = "drop") |>
+    pivot_wider(names_from = year, values_from = valeur) |>
+    head(10)
+
+  ft_un(trend_tbl,
+        caption = "Tableau 3 — Valeurs agrégées par indicateur et année.")
+}
+
+
+```
+
+
+# Produit 5 — Comparaison inter-pays
+
+```{r}
+df_cp <- filter_numeric(numeric_df)
+
+if (is.null(df_cp) || !nrow(df_cp)) {
+  cat("⚠️ *Aucune donnée pour la comparaison inter-pays.*")
+} else {
+  ref_indicator <- sel_indicator %||% {
+    df_cp |> count(indicator, sort = TRUE) |> slice(1) |> pull(indicator)
+  }
+
+  df_cp |>
+    filter(indicator == ref_indicator[1], year == sel_year) |>
+    group_by(country) |>
+    summarise(value = sum(value, na.rm = TRUE), .groups = "drop") |>
+    filter(value > 0) |>
+    arrange(desc(value)) |>
+    head(20) |>
+    ggplot(aes(x = reorder(country, value), y = value)) +
+    geom_col(fill = un_palette$blue, width = 0.7) +
+    geom_text(aes(label = label_comma(big.mark = " ")(value)),
+              hjust = -0.1, size = 3, color = un_palette$navy) +
+    coord_flip() +
+    scale_y_continuous(labels = label_comma(big.mark = " "),
+                       expand = expansion(mult = c(0, 0.2))) +
+    labs(
+      title = "Classement des pays — indicateur sélectionné",
+      subtitle = sprintf("%s (%s)", ref_indicator[1], sel_year),
+      x = NULL, y = "Valeur",
+      caption = "Top 20 pays. Source : Base analytique TVD"
+    ) +
+    theme_un()
+}
+
+
+```
+
+# Produit 6 — Cartographie géographique
+## Carte d'endémicité
+
+```{r}
+if (is.null(shp_obj) || is.null(endemic_df)) {
+  cat("⚠️ *Shapefile ou données d'endémicité non fournis.*")
+} else {
+  ref_disease <- sel_disease[1] %||% unique(endemic_df$disease)[1]
+
+  country_candidates <- c("country", "pays", "name", "admin", "name_0", "cntry_name")
+  country_match <- match(country_candidates, tolower(names(shp_obj)), nomatch = 0L)
+  country_match <- country_match[country_match > 0L]
+  country_col <- if (length(country_match)) names(shp_obj)[country_match[1]] else names(shp_obj)[1]
+
+  df_map <- endemic_df |>
+    filter(disease == ref_disease, year == sel_year) |>
+    mutate(join_key = tolower(trimws(country)))
+
+  shp_j <- shp_obj |>
+    mutate(join_key = tolower(trimws(.data[[country_col]])))
+
+  merged <- dplyr::left_join(shp_j, df_map, by = "join_key")
+
+  ggplot(merged) +
+    geom_sf(aes(fill = endemicity_status),
+            color = "white", linewidth = 0.1) +
+    scale_fill_manual(values = un_endemic_colors,
+                      name = "Statut",
+                      na.value = "#EEEEEE") +
+    labs(
+      title = sprintf("Endémicité — %s", ref_disease),
+      subtitle = sprintf("Année %s", sel_year),
+      caption = "Projection WGS84. Source : OMS / shapefile utilisateur."
+    ) +
+    theme_un() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank()) +
+    guides(fill = guide_legend(ncol = 1))
+}
+
+
+
+```
+
+## Carte d'indicateur numérique
+
+```{r}
+if (is.null(shp_obj) || is.null(numeric_df)) {
+  cat("⚠️ *Shapefile ou données numériques non fournis.*")
+} else {
+  ref_ind <- sel_indicator[1] %||% {
+    numeric_df |> count(indicator, sort = TRUE) |> slice(1) |> pull(indicator)
+  }
+
+  country_candidates <- c("country", "pays", "name", "admin", "name_0", "cntry_name")
+  country_match <- match(country_candidates, tolower(names(shp_obj)), nomatch = 0L)
+  country_match <- country_match[country_match > 0L]
+  country_col <- if (length(country_match)) names(shp_obj)[country_match[1]] else names(shp_obj)[1]
+
+  df_num <- numeric_df |>
+    filter(indicator == ref_ind, year == sel_year) |>
+    group_by(country) |>
+    summarise(value = sum(value, na.rm = TRUE), .groups = "drop") |>
+    mutate(join_key = tolower(trimws(country)))
+
+  shp_j <- shp_obj |>
+    mutate(join_key = tolower(trimws(.data[[country_col]])))
+
+  merged <- dplyr::left_join(shp_j, df_num, by = "join_key")
+
+  ggplot(merged) +
+    geom_sf(aes(fill = value), color = "white", linewidth = 0.1) +
+    scale_fill_viridis_c(option = "YlOrRd", direction = -1,
+                         labels = label_comma(big.mark = " "),
+                         name = "Valeur",
+                         na.value = "#EEEEEE") +
+    labs(
+      title = sprintf("Indicateur — %s", ref_ind),
+      subtitle = sprintf("Année %s", sel_year),
+      caption = "Projection WGS84. Source : Base analytique TVD."
+    ) +
+    theme_un() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          panel.grid = element_blank())
+}
+
+
+
+```
+
+# Conclusions et perspectives
+::: {.un-conclusion}
+## Points saillants
+
+```{r}
+if (!is.null(endemic_df)) {
+  df_c <- filter_endemic(endemic_df)
+  if (nrow(df_c)) {
+    top_dis <- df_c |>
+      mutate(e = grepl("^Yes", endemicity_status)) |>
+      group_by(disease) |>
+      summarise(n = sum(e), .groups = "drop") |>
+      arrange(desc(n)) |> head(3) |> pull(disease)
+
+    cat("- Les maladies les plus répandues sont : **",
+        paste(top_dis, collapse = ", "), "**.\n")
+    cat("- La couverture géographique concerne **",
+        length(unique(df_c$country)), " pays**.\n")
+    cat("- L'année de référence est **", sel_year, "**.\n")
+  }
+}
+
+
+```
+Recommandations
+Renforcer la surveillance dans les pays où les systèmes sont absents ou incomplets.
+Harmoniser les définitions d'indicateurs entre GNARF et GHO pour améliorer la comparabilité.
+Automatiser la mise à jour annuelle via l'API GHO intégrée à la plateforme.
+Partager ce rapport avec les points focaux nationaux pour validation.
+:::
+
+<div class="un-footer">
+  <div>SOP Data App for TVD — Rapport généré automatiquement</div>
+  <div>© `r format(Sys.Date(), "%Y")` — Document interne, usage réservé</div>
+</div>
+```{r, results='asis'}
+
+cat('\n\n<details><summary>Informations techniques</summary>\n\n')
+cat('<pre>Généré le :', format(Sys.time(), "%Y-%m-%d %H:%M:%S"), '\n')
+cat('R version :', R.version.string, '\n')
+cat('Plateforme :', Sys.info()["sysname"], Sys.info()["release"], '</pre></details>\n')
+
+```
+

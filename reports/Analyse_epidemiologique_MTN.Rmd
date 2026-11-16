@@ -1,0 +1,467 @@
+---
+title: "Analyse épidémiologique des maladies tropicales négligées"
+subtitle: "Situation, endémicité et évolution des indicateurs GNARF"
+author: "Application TVD"
+date: "`r format(Sys.Date(), '%d/%m/%Y')`"
+lang: fr
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: true
+    df_print: paged
+params:
+  source: "GNARF"
+  disease: "Buruli ulcer"
+  year: "latest"
+  period: "latest"
+  country: "all"
+  minimum_common_countries: 1
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.align = "center", out.width = "100%")
+required <- c("DBI", "RSQLite", "dplyr", "tidyr", "knitr", "DT")
+missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]
+if (length(missing)) stop("Packages R manquants : ", paste(missing, collapse = ", "))
+
+candidate_db <- c(
+  file.path(getwd(), "input", "tvd_datawarehouse.sqlite"),
+  file.path(getwd(), "..", "input", "tvd_datawarehouse.sqlite"),
+  file.path(getwd(), "..", "..", "input", "tvd_datawarehouse.sqlite")
+)
+candidate_db <- candidate_db[file.exists(candidate_db)]
+if (!length(candidate_db)) {
+  stop("Base SQLite introuvable. Placez ce rapport dans reports/ du projet TVD et vérifiez input/tvd_datawarehouse.sqlite.")
+}
+db_path <- normalizePath(candidate_db[1], winslash = "/", mustWork = TRUE)
+project_root <- dirname(dirname(db_path))
+knitr::opts_knit$set(root.dir = project_root)
+con <- DBI::dbConnect(RSQLite::SQLite(), db_path)
+tables <- DBI::dbListTables(con)
+source_key <- toupper(as.character(params$source))
+if (source_key == "GNARF") {
+  master_table <- if ("gnarf_master" %in% tables) "gnarf_master" else if ("gnarf_data_validated_structured" %in% tables) "gnarf_data_validated_structured" else NA_character_
+} else if (source_key == "GHO") {
+  master_table <- if ("gho_data_validated" %in% tables) "gho_data_validated" else NA_character_
+} else {
+  stop("Le paramètre source doit être GNARF ou GHO.")
+}
+if (is.na(master_table)) stop("Aucune table GNARF fusionnée ou validée n'est présente dans SQLite.")
+raw_data <- DBI::dbReadTable(con, master_table)
+DBI::dbDisconnect(con)
+if (!nrow(raw_data)) stop("La table GNARF sélectionnée est vide.")
+
+get_col <- function(data, candidates, default = NA_character_) {
+  found <- intersect(candidates, names(data))
+  if (length(found)) data[[found[1]]] else rep(default, nrow(data))
+}
+
+prefix_names <- c(
+  BUR = "Buruli ulcer", CHI = "Chikungunya", DEN = "Dengue",
+  DRA = "Dracunculiasis", CHA = "Chagas disease", CHR = "Chromoblastomycosis",
+  ECH = "Echinococcosis", HAG = "Human African trypanosomiasis (gambiense)",
+  HAR = "Human African trypanosomiasis (rhodesiense)", LEI = "Leishmaniasis",
+  LEP = "Leprosy", MYC = "Mycetoma", NOM = "Noma", ONC = "Onchocerciasis",
+  RAB = "Rabies", SCA = "Scabies", SCH = "Schistosomiasis",
+  SNK = "Snakebite envenoming", TUN = "Tungiasis", YAW = "Yaws",
+  TAE = "Taeniasis and cysticercosis", CSD = "Common skin diseases"
+)
+label_patterns <- c(
+  "Buruli ulcer" = "BURULI", "Chikungunya" = "CHIKUNGUNYA",
+  "Dengue" = "DENGUE", "Dracunculiasis" = "DRACUNCUL",
+  "Chagas disease" = "CHAGAS", "Chromoblastomycosis" = "CHROMOBLASTOMYCOSIS",
+  "Echinococcosis" = "ECHINOCOCCOSIS", "Foodborne trematodiases" = "FOODBORNE|TREMATODIAS",
+  "Human African trypanosomiasis (gambiense)" = "GAMBIENSE|GHAT",
+  "Human African trypanosomiasis (rhodesiense)" = "RHODESIENSE|RHAT",
+  "Leishmaniasis" = "LEISHMANIASIS", "Leprosy" = "LEPROSY",
+  "Lymphatic filariasis" = "LYMPHATIC FILARIASIS|LYMPHATIC-FILARIASIS",
+  "Mycetoma" = "MYCETOMA", "Noma" = "NOMA", "Onchocerciasis" = "ONCHOCERCIASIS",
+  "Rabies" = "RABIES", "Scabies" = "SCABIES", "Schistosomiasis" = "SCHISTOSOMIASIS",
+  "Soil-transmitted helminthiases" = "SOIL-TRANSMITTED|HELMINTHIAS",
+  "Sporotrichosis" = "SPOROTRICHOSIS", "Paracoccidioidomycosis" = "PARACOCCIDIOIDOMYCOSIS",
+  "Trachoma" = "TRACHOMA", "Snakebite envenoming" = "SNAKEBITE",
+  "Tungiasis" = "TUNGIASIS", "Yaws" = "YAWS",
+  "Taeniasis and cysticercosis" = "TAENIASIS|CYSTICERCOSIS",
+  "Common skin diseases" = "COMMON SKIN|CSD"
+)
+disease_name <- function(code, label) {
+  code <- toupper(as.character(code))
+  label <- as.character(label)
+  prefix <- if (!is.na(code) && grepl("^NTD-[A-Z]+-", code)) sub("^NTD-([A-Z]+)-.*$", "\\1", code) else ""
+  if (prefix %in% names(prefix_names)) return(unname(prefix_names[[prefix]]))
+  key <- toupper(label)
+  matches <- names(label_patterns)[vapply(label_patterns, function(p) grepl(p, key), logical(1))]
+  if (length(matches)) matches[1] else label
+}
+
+legend <- c(
+  "1" = "Yes, country is endemic (report required)",
+  "2" = "No, country is not endemic and will not report for this disease",
+  "3" = "No, country is known to be endemic but no surveillance system exists or data are not available",
+  "4" = "Yes, country is not endemic but reports for surveillance/zero reporting",
+  "5" = "Never endemic"
+)
+legend_levels <- unname(legend[c("4", "3", "2", "1", "5")])
+status_colours <- c(
+  "Yes, country is endemic (report required)" = "#e74c3c",
+  "No, country is not endemic and will not report for this disease" = "#49ad62",
+  "No, country is known to be endemic but no surveillance system exists or data are not available" = "#f0ad4e",
+  "Yes, country is not endemic but reports for surveillance/zero reporting" = "#4a90e2",
+  "Never endemic" = "#7b8794",
+  "Aucune donnée" = "#d1d5db",
+  "Statuts multiples" = "#6f42c1"
+)
+
+code <- as.character(get_col(raw_data, c("gnarf_indicator_code", "dictionary_indicator_code", "indicator_code", "gho_indicator_code")))
+indicator <- as.character(get_col(raw_data, c("dictionary_indicator_name", "gnarf_indicator_name", "indicator_name", "gho_indicator_name", "indicator_original", "data")))
+indicator[is.na(indicator) | !nzchar(trimws(indicator))] <- code[is.na(indicator) | !nzchar(trimws(indicator))]
+type <- tolower(as.character(get_col(raw_data, "gnarf_type", "")))
+domain <- as.character(get_col(raw_data, c("indicator_domain", "domain"), ""))
+domain[is.na(domain)] <- ""
+is_endemicity <- type %in% c("endemicite", "endemicity") | grepl("^endemicity", indicator, ignore.case = TRUE)
+domain[is_endemicity] <- "Endémicité"
+domain[!is_endemicity & !nzchar(domain) & grepl("death|mortality|décès|mortal", indicator, ignore.case = TRUE)] <- "Mortalité"
+domain[!is_endemicity & !nzchar(domain) & grepl("treated|treatment|trait|referred|prise en charge", indicator, ignore.case = TRUE)] <- "Prise en charge"
+domain[!is_endemicity & !nzchar(domain) & grepl("new |incidence|nouveau|nouvelle", indicator, ignore.case = TRUE)] <- "Incidence"
+domain[!is_endemicity & !nzchar(domain)] <- "Prévalence"
+disease <- mapply(disease_name, code, indicator, USE.NAMES = FALSE)
+period <- suppressWarnings(as.integer(as.character(get_col(raw_data, c("period", "year", "time_dim")))))
+country <- as.character(get_col(raw_data, c("organisation_unit", "organization_unit", "country", "location")))
+raw_value <- as.character(get_col(raw_data, c("endemicity_status_code", "value", "numeric_value", "value_numeric")))
+cases <- suppressWarnings(as.numeric(gsub(",", ".", raw_value, fixed = TRUE)))
+explicit_numeric <- intersect(c("value_numeric", "numeric_value"), names(raw_data))
+if (length(explicit_numeric)) {
+  num <- suppressWarnings(as.numeric(raw_data[[explicit_numeric[1]]]))
+  cases[!is.na(num)] <- num[!is.na(num)]
+}
+status_value <- raw_value
+if ("endemicity_status_code" %in% names(raw_data)) {
+  status_value[!is.na(raw_data$endemicity_status_code)] <- as.character(raw_data$endemicity_status_code[!is.na(raw_data$endemicity_status_code)])
+}
+status_number <- suppressWarnings(as.numeric(status_value))
+endemicity_cat <- unname(legend[as.character(status_number)])
+endemicity_cat[!is_endemicity] <- NA_character_
+endemicity_cat <- factor(endemicity_cat, levels = legend_levels, ordered = TRUE)
+age_group <- as.character(get_col(raw_data, c("ntd_age_groups_gnarf", "age_group", "age_dimension"), ""))
+sex <- as.character(get_col(raw_data, c("ntd_sex_with_unknown", "sex", "sex_dimension"), ""))
+age_group[is.na(age_group)] <- ""
+sex[is.na(sex)] <- ""
+
+data <- data.frame(
+  source = params$source,
+  code = code,
+  disease = disease,
+  indicator = indicator,
+  domain = domain,
+  year = period,
+  country = country,
+  type = ifelse(is_endemicity, "endemicity", "numeric"),
+  cases = ifelse(is_endemicity, NA_real_, cases),
+  status_code = status_number,
+  endemicity_cat = endemicity_cat,
+  age_group = age_group,
+  sex = sex,
+  stringsAsFactors = FALSE
+)
+data$source <- as.character(params$source)
+numeric_data <- subset(data, type == "numeric" & !is.na(year) & !is.na(country) & nzchar(country) & !is.na(cases))
+endemicity_data <- subset(data, type == "endemicity" & !is.na(year) & !is.na(country) & nzchar(country))
+
+# Retient une seule valeur totale par indicateur/pays/année, en préférant la
+# dimension All Ages + Unknown/Both sexes. Les ventilations distinctes ne sont
+# pas additionnées avec leur total.
+aggregate_observations <- function(x) {
+  if (!nrow(x)) return(x)
+  groups <- x |>
+    dplyr::group_by(disease, code, indicator, domain, year, country) |>
+    dplyr::group_split()
+  keep <- lapply(groups, function(part) {
+    age <- tolower(trimws(part$age_group))
+    sex_value <- tolower(trimws(part$sex))
+    all_age <- grepl("all ages", age, fixed = TRUE)
+    both_sexes <- grepl("unknown|both", sex_value)
+    total <- which(all_age & both_sexes)
+    if (length(total)) return(part[total[1], , drop = FALSE])
+    all_age_rows <- which(all_age)
+    if (length(all_age_rows)) {
+      male <- all_age_rows[grepl("male", sex_value[all_age_rows]) & !grepl("female", sex_value[all_age_rows])]
+      female <- all_age_rows[grepl("female", sex_value[all_age_rows])]
+      if (length(male) && length(female)) {
+        row <- part[male[1], , drop = FALSE]
+        row$cases <- part$cases[male[1]] + part$cases[female[1]]
+        return(row)
+      }
+      return(NULL)
+    }
+    no_dimensions <- which(!nzchar(age) & !nzchar(sex_value))
+    if (length(no_dimensions)) return(part[no_dimensions[1], , drop = FALSE])
+    NULL
+  })
+  dplyr::bind_rows(keep)
+}
+analysis <- aggregate_observations(numeric_data)
+available_years <- sort(unique(data$year[!is.na(data$year)]))
+year_min <- if (length(available_years)) min(available_years) else NA_integer_
+year_max <- if (length(available_years)) max(available_years) else NA_integer_
+
+annual_summary <- if (nrow(analysis)) analysis |>
+  dplyr::group_by(domain, disease, code, indicator, year) |>
+  dplyr::summarise(total_cases = sum(cases, na.rm = TRUE), countries = dplyr::n_distinct(country), .groups = "drop") else data.frame()
+
+make_comparisons <- function(x, from_year = year_min, to_year = year_max) {
+  if (!nrow(x) || is.na(from_year) || is.na(to_year) || from_year == to_year) return(data.frame())
+  groups <- x |>
+    dplyr::group_by(domain, disease, code, indicator) |>
+    dplyr::group_split()
+  paired <- lapply(groups, function(part) {
+    from <- part[part$year == from_year, , drop = FALSE]
+    to <- part[part$year == to_year, , drop = FALSE]
+    common <- intersect(from$country, to$country)
+    if (!length(common)) return(NULL)
+    value_from <- sum(from$cases[match(common, from$country)], na.rm = TRUE)
+    value_to <- sum(to$cases[match(common, to$country)], na.rm = TRUE)
+    change <- value_to - value_from
+    pct <- if (value_from == 0) NA_real_ else 100 * change / value_from
+    data.frame(
+      domain = part$domain[1], disease = part$disease[1], code = part$code[1],
+      indicator = part$indicator[1], countries_common = length(common),
+      year_min = from_year, value_min = value_from,
+      year_max = to_year, value_max = value_to,
+      change = change, change_pct = pct,
+      stringsAsFactors = FALSE
+    )
+  })
+  dplyr::bind_rows(paired) |>
+    dplyr::arrange(domain, dplyr::desc(abs(change_pct)))
+}
+comparisons <- make_comparisons(analysis)
+
+selected_disease <- as.character(params$disease)
+if (identical(selected_disease, "all") || !selected_disease %in% unique(data$disease)) {
+  selected_disease <- if ("Buruli ulcer" %in% unique(data$disease)) "Buruli ulcer" else sort(unique(data$disease))[1]
+}
+selected_year <- if (identical(as.character(params$year), "latest")) year_max else suppressWarnings(as.integer(params$year))
+if (is.na(selected_year) || !selected_year %in% available_years) selected_year <- year_max
+available_periods <- sort(unique(endemicity_data$year[
+  endemicity_data$disease == selected_disease & !is.na(endemicity_data$year)
+]))
+selected_period <- if (identical(as.character(params$period), "latest")) {
+  if (length(available_periods)) max(available_periods) else NA_integer_
+} else {
+  suppressWarnings(as.integer(params$period))
+}
+if (is.na(selected_period) || !selected_period %in% available_periods) {
+  selected_period <- if (length(available_periods)) max(available_periods) else NA_integer_
+}
+```
+
+# Objet et méthode
+
+Ce rapport applique les trois niveaux du plan d’analyse : **A. carte d’endémicité**, **B. fiche régionale par maladie** et **C. profil pays**. Il lit la table correspondant au paramètre `source` dans la base SQLite du projet (`input/tvd_datawarehouse.sqlite`). Les résultats se mettent à jour à chaque rendu du document.
+
+La variation entre les années extrêmes est calculée ainsi :
+
+\[
+\text{Variation (\%)} = \frac{\text{valeur année maximale} - \text{valeur année minimale}}{\text{valeur année minimale}} \times 100
+\]
+
+Les valeurs agrégées privilégient les lignes **All Ages + Unknown/Both sexes**. Les pays doivent avoir une observation aux deux années comparées. Les catégories d’âge ou de sexe ne sont pas additionnées au total correspondant.
+
+## Portée des indicateurs
+
+Les indicateurs du fichier sont des **comptes déclarés**. Sans dénominateurs de population, ce rapport ne calcule pas de taux de prévalence, d’incidence ou de mortalité. Sans nombre de personnes éligibles au traitement, il ne calcule pas la couverture thérapeutique. Une variation de déclarations peut refléter un changement de situation sanitaire, de surveillance ou de complétude des rapports.
+
+# A. Endémicité
+
+**Filtres** — Source : `r params$source` ; maladie : `r selected_disease` ; année rapportée (`period`) : `r selected_period`.
+
+La légende des codes appliquée dans le rapport est :
+
+```{r endemicity-legend, results='asis'}
+knitr::kable(data.frame(
+  Code = c(4, 3, 2, 1, 5, "—"),
+  Statut = c(legend_levels, "Statuts multiples (plusieurs statuts pour le pays et la période retenue)")
+), format = "html", caption = "Légende d’endémicité", escape = TRUE)
+```
+
+## Heatmap par pays
+
+```{r endemicity-heatmap}
+heatmap_data <- endemicity_data |>
+  dplyr::filter(disease == selected_disease, year == selected_period) |>
+  dplyr::group_by(country) |>
+  dplyr::summarise(
+    Statut = {
+      statuts <- unique(as.character(endemicity_cat[!is.na(endemicity_cat)]))
+      if (length(statuts) == 0L) "Aucune donnée"
+      else if (length(statuts) == 1L) statuts[[1]]
+      else "Statuts multiples"
+    },
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(country) |>
+  dplyr::rename(Pays = country)
+if (nrow(heatmap_data)) {
+  DT::datatable(heatmap_data, rownames = FALSE, options = list(pageLength = 25, scrollX = TRUE)) |>
+    DT::formatStyle("Statut", target = "row",
+                    backgroundColor = DT::styleEqual(names(status_colours), unname(status_colours)),
+                    color = DT::styleEqual(names(status_colours), rep("white", length(status_colours))))
+} else {
+  cat("Aucun statut d’endémicité pour les filtres sélectionnés.")
+}
+```
+
+## Répartition des statuts
+
+```{r endemicity-counts, results='asis'}
+status_summary <- endemicity_data |>
+  dplyr::filter(disease == selected_disease, year == selected_period, !is.na(endemicity_cat)) |>
+  dplyr::group_by(disease, endemicity_cat) |>
+  dplyr::summarise(pays = dplyr::n_distinct(country), .groups = "drop") |>
+  dplyr::arrange(disease, endemicity_cat)
+if (nrow(status_summary)) {
+  knitr::kable(status_summary, format = "html", caption = paste("Statuts déclarés en", selected_period))
+} else {
+  cat("Aucun statut exploitable pour cette année.")
+}
+```
+
+# B. Fiche régionale par maladie
+
+Les tableaux annuels décrivent les comptes par indicateur et le nombre de pays déclarants. Les totaux de **différents indicateurs ne sont pas additionnés entre eux**, car ils peuvent représenter des mesures distinctes ou des catégories qui se recouvrent.
+
+## Couverture des données par domaine et année
+
+```{r domain-coverage, results='asis'}
+coverage <- data |>
+  dplyr::filter(!is.na(year), !is.na(country), nzchar(country)) |>
+  dplyr::group_by(domain, year) |>
+  dplyr::summarise(
+    indicateurs = dplyr::n_distinct(code),
+    pays_declarants = dplyr::n_distinct(country),
+    lignes = dplyr::n(),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(domain, year)
+knitr::kable(coverage, format = "html", caption = "Couverture descriptive — elle varie selon les années et les domaines")
+```
+
+## Situation et changements : prévalence, incidence, mortalité et prise en charge
+
+Les résultats de chaque domaine sont calculés séparément. La comparaison entre les années minimale et maximale utilise uniquement les pays ayant déclaré aux deux périodes.
+
+```{r domain-comparisons, results='asis'}
+domain_labels <- c("Prévalence", "Incidence", "Mortalité", "Prise en charge")
+for (domain_name in domain_labels) {
+  cat("\n### ", domain_name, "\n\n", sep = "")
+  selected <- comparisons |>
+    dplyr::filter(domain == domain_name, countries_common >= params$minimum_common_countries) |>
+    dplyr::mutate(
+      Variation = ifelse(is.na(change_pct), "Non calculable (valeur initiale nulle)", paste0(format(round(change_pct, 1), nsmall = 1), "%"))
+    ) |>
+    dplyr::select(Maladie = disease, Indicateur = indicator, `Pays communs` = countries_common,
+                  `Année minimale` = year_min, `Valeur minimale` = value_min,
+                  `Année maximale` = year_max, `Valeur maximale` = value_max,
+                  Écart = change, Variation)
+  if (nrow(selected)) {
+    print(knitr::kable(selected, format = "html", caption = paste("Comparaison", year_min, "à", year_max)))
+  } else {
+    cat("Aucune comparaison appariée disponible pour ce domaine.\n\n")
+  }
+}
+```
+
+## Graphique des variations
+
+```{r change-plot, fig.height=9}
+graphics::par(mfrow = c(2, 2), mar = c(4, 12, 3, 1), oma = c(0, 0, 1, 0))
+for (domain_name in c("Prévalence", "Incidence", "Mortalité", "Prise en charge")) {
+  plot_data <- comparisons[comparisons$domain == domain_name & !is.na(comparisons$change_pct), , drop = FALSE]
+  if (nrow(plot_data)) {
+    plot_data <- head(plot_data[order(abs(plot_data$change_pct), decreasing = TRUE), , drop = FALSE], 10)
+    vals <- rev(plot_data$change_pct)
+    cols <- ifelse(vals >= 0, "#d9534f", "#2e9d62")
+    graphics::barplot(vals, names.arg = rev(plot_data$indicator), horiz = TRUE, las = 1,
+                      col = cols, border = NA, xlab = "Variation (%)", main = domain_name,
+                      cex.names = 0.72)
+    graphics::abline(v = 0, col = "#495057")
+  } else {
+    graphics::plot.new()
+    graphics::title(main = paste(domain_name, "— pas de comparaison disponible"))
+  }
+}
+graphics::mtext(paste("Années extrêmes :", year_min, "et", year_max,
+                      "| pays communs par indicateur"), outer = TRUE, side = 3)
+```
+
+## Interprétation par domaine
+
+- **Prévalence** : le fichier présente des nombres de cas et des catégories de cas. Une prévalence (cas / population) exige une population de référence et une définition de période.
+- **Incidence** : les indicateurs de nouveaux cas peuvent décrire l’évolution des notifications. Les taux d’incidence exigent une population à risque ou un dénominateur adéquat.
+- **Mortalité** : les décès déclarés sont présentés par indicateur. Un taux de mortalité exige les populations correspondantes ; une létalité nécessite des cas et décès comparables pour la même maladie, période et population.
+- **Prise en charge** : les nombres de personnes traitées ou orientées sont décrits. La couverture du traitement exige le nombre de personnes éligibles comme dénominateur.
+
+# C. Profil pays
+
+Le profil peut être filtré en modifiant le paramètre `country` dans l’en-tête YAML. La valeur `all` affiche la couverture de tous les pays ; un nom de pays affiche son détail.
+
+```{r country-profile, results='asis'}
+if (identical(as.character(params$country), "all")) {
+  country_coverage <- analysis |>
+    dplyr::group_by(country, year) |>
+    dplyr::summarise(indicateurs = dplyr::n_distinct(code), domaines = paste(sort(unique(domain)), collapse = ", "), .groups = "drop") |>
+    dplyr::arrange(country, year)
+  knitr::kable(country_coverage, format = "html", caption = "Indicateurs numériques disponibles par pays et année")
+} else {
+  country_data <- analysis |>
+    dplyr::filter(country == params$country) |>
+    dplyr::arrange(domain, disease, indicator, year)
+  country_change <- make_comparisons(country_data)
+  if (nrow(country_data)) {
+    print(knitr::kable(country_data |>
+      dplyr::select(Domaine = domain, Maladie = disease, Indicateur = indicator,
+                    Année = year, Valeur = cases, Âge = age_group, Sexe = sex),
+      format = "html", caption = paste("Séries disponibles —", params$country)))
+    if (nrow(country_change)) {
+      cat("\n### Changements entre années extrêmes\n\n")
+      country_change$Variation <- ifelse(is.na(country_change$change_pct), "Non calculable (valeur initiale nulle)", paste0(format(round(country_change$change_pct, 1), nsmall = 1), "%"))
+      print(knitr::kable(country_change |>
+        dplyr::select(Domaine = domain, Maladie = disease, Indicateur = indicator,
+                      `Pays communs` = countries_common, `Année minimale` = year_min,
+                      `Valeur minimale` = value_min, `Année maximale` = year_max,
+                      `Valeur maximale` = value_max, Écart = change, Variation),
+        format = "html", caption = paste("Comparaison du pays", params$country)))
+    } else {
+      cat("\nAucune paire d’années comparable n’est disponible pour ce pays.\n")
+    }
+  } else {
+    cat("Aucune observation numérique disponible pour ce pays. Vérifiez son nom dans SQLite.\n")
+  }
+}
+```
+
+# Qualité et limites des données
+
+```{r data-quality, results='asis'}
+missing_summary <- data.frame(
+  Mesure = c("Lignes dans la table source", "Année manquante", "Pays manquant", "Code indicateur manquant",
+             "Valeur numérique manquante (hors endémicité)", "Lignes d’endémicité", "Pays distincts", "Indicateurs distincts"),
+  Valeur = c(
+    nrow(raw_data), sum(is.na(data$year)), sum(is.na(data$country) | !nzchar(data$country)),
+    sum(is.na(data$code) | !nzchar(data$code)),
+    sum(data$type == "numeric" & is.na(data$cases)), nrow(endemicity_data),
+    dplyr::n_distinct(data$country, na.rm = TRUE), dplyr::n_distinct(data$code, na.rm = TRUE)
+  )
+)
+knitr::kable(missing_summary, format = "html", caption = "Contrôles de couverture")
+```
+
+Les comparaisons sont descriptives et ne démontrent pas à elles seules une hausse ou une baisse réelle de transmission. Les changements de complétude, de surveillance, de définition de cas ou de source doivent être examinés avant toute conclusion programmatique. Les changements basés sur peu de pays sont particulièrement fragiles ; le paramètre `minimum_common_countries` permet d’exiger davantage de pays pour les tableaux par domaine.
+
+## Paramètres à adapter
+
+Dans l’en-tête YAML, vous pouvez modifier : `source` (`GNARF` ou `GHO` selon les tables présentes dans SQLite), `disease` (maladie du heatmap, ou `all`), `period` (année rapportée pour l’endémicité, ou `latest`), `year` (année pour les analyses numériques, ou `latest`), `country` (pays du profil, ou `all`) et `minimum_common_countries` (seuil de pays communs aux deux années).
+

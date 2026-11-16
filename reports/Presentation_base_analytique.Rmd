@@ -1,0 +1,6 @@
+---
+title: "Génération de présentation retirée"
+output: html_document
+---
+
+La génération de présentations a été retirée de l’application.

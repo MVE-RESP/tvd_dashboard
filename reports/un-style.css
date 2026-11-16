@@ -1,0 +1,372 @@
+/* ============================================================
+   UN-STYLE.CSS — Feuille de style pour rapport MTN
+   Inspirée des standards visuels des Nations Unies / OMS
+   ============================================================ */
+
+/* ---------- 1. RESET & BASE ---------- */
+body {
+  font-family: 'Arial', 'Helvetica', sans-serif !important;
+  color: #333333 !important;
+  background-color: #ffffff !important;
+  line-height: 1.6;
+  font-size: 11pt;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 20px 40px;
+}
+
+/* ---------- 2. EN-TÊTE DU DOCUMENT ---------- */
+#header, .title {
+  text-align: left;
+  border-bottom: 4px solid #009EDB; /* Bleu UN */
+  padding-bottom: 15px;
+  margin-bottom: 30px;
+}
+
+h1.title {
+  color: #17365D !important; /* Bleu foncé UN */
+  font-size: 26pt;
+  font-weight: bold;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+h1.subtitle, .subtitle {
+  color: #55606E !important;
+  font-size: 14pt;
+  font-style: italic;
+  font-weight: normal;
+  margin-top: 0;
+}
+
+.author, .date {
+  color: #55606E;
+  font-size: 10pt;
+  margin: 2px 0;
+}
+
+/* ---------- 3. TITRES DE SECTION ---------- */
+h1, h2, h3, h4, h5, h6 {
+  color: #17365D !important;
+  font-family: 'Arial', sans-serif !important;
+  font-weight: bold;
+  margin-top: 1.8em;
+  margin-bottom: 0.6em;
+}
+
+h1 {
+  font-size: 20pt;
+  border-bottom: 3px solid #009EDB;
+  padding-bottom: 8px;
+}
+
+h2 {
+  font-size: 16pt;
+  border-bottom: 2px solid #009EDB;
+  padding-bottom: 5px;
+}
+
+h3 {
+  font-size: 13pt;
+  color: #009EDB !important;
+  border-left: 4px solid #009EDB;
+  padding-left: 10px;
+}
+
+h4 {
+  font-size: 11pt;
+  color: #55606E !important;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* ---------- 4. TABLE DES MATIÈRES (TOC) ---------- */
+#TOC {
+  background-color: #F2F2F2;
+  border-left: 4px solid #009EDB;
+  padding: 20px 25px;
+  margin-bottom: 30px;
+  font-size: 10pt;
+  border-radius: 2px;
+}
+
+#TOC .toctitle {
+  color: #17365D !important;
+  font-weight: bold;
+  font-size: 12pt;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+#TOC ul {
+  list-style: none;
+  padding-left: 15px;
+}
+
+#TOC a {
+  color: #17365D !important;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+#TOC a:hover {
+  color: #C8102E !important; /* Rouge UN hover */
+  text-decoration: underline;
+}
+
+/* TOC flottant à droite */
+div.tocify {
+  border: 1px solid #009EDB;
+  border-radius: 2px;
+}
+
+.tocify-header {
+  text-indent: 0;
+}
+
+.tocify-item {
+  font-size: 10pt;
+}
+
+.tocify .list-group-item {
+  border: none;
+  color: #17365D;
+}
+
+.tocify .list-group-item.active {
+  background-color: #009EDB !important;
+  color: #ffffff !important;
+  border-color: #009EDB !important;
+}
+
+/* ---------- 5. PARAGRAPHES & TEXTE ---------- */
+p {
+  text-align: justify;
+  margin: 0.8em 0;
+}
+
+strong, b {
+  color: #17365D;
+  font-weight: bold;
+}
+
+em, i {
+  color: #55606E;
+}
+
+a {
+  color: #009EDB;
+  text-decoration: none;
+}
+
+a:hover {
+  color: #C8102E;
+  text-decoration: underline;
+}
+
+/* ---------- 6. TABLEAUX ---------- */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 20px 0;
+  font-size: 10pt;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+table thead tr {
+  background-color: #17365D;
+  color: #ffffff !important;
+  text-align: left;
+  font-weight: bold;
+}
+
+table th, table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #dddddd;
+  text-align: left;
+}
+
+table tbody tr:nth-of-type(even) {
+  background-color: #F2F7FB;
+}
+
+table tbody tr:hover {
+  background-color: #E1EEF7;
+}
+
+table tbody tr:last-of-type {
+  border-bottom: 2px solid #009EDB;
+}
+
+/* Flextable overrides */
+.flextable {
+  margin: 20px auto !important;
+}
+
+/* ---------- 7. BLOCS DE CODE ---------- */
+pre, code {
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 9.5pt;
+}
+
+pre {
+  background-color: #F7F7F7;
+  border-left: 4px solid #009EDB;
+  padding: 12px 15px;
+  overflow-x: auto;
+  border-radius: 2px;
+  margin: 15px 0;
+}
+
+code {
+  background-color: #F2F2F2;
+  color: #C8102E;
+  padding: 2px 5px;
+  border-radius: 2px;
+}
+
+pre code {
+  background-color: transparent;
+  color: #333;
+  padding: 0;
+}
+
+/* ---------- 8. CITATIONS ---------- */
+blockquote {
+  border-left: 4px solid #009EDB;
+  background-color: #F2F7FB;
+  padding: 12px 20px;
+  margin: 15px 0;
+  color: #55606E;
+  font-style: italic;
+}
+
+/* ---------- 9. FIGURES & IMAGES ---------- */
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 15px auto;
+}
+
+.figure {
+  text-align: center;
+  margin: 25px 0;
+}
+
+.caption, p.caption {
+  color: #55606E;
+  font-size: 9.5pt;
+  font-style: italic;
+  text-align: center;
+  margin-top: 8px;
+  padding-top: 5px;
+  border-top: 1px dotted #cccccc;
+}
+
+/* Logo UN en haut à droite */
+.un-logo {
+  position: absolute;
+  top: 20px;
+  right: 40px;
+  max-height: 60px;
+  width: auto;
+}
+
+/* ---------- 10. LISTES ---------- */
+ul, ol {
+  margin: 0.8em 0;
+  padding-left: 25px;
+}
+
+ul li::marker {
+  color: #009EDB;
+}
+
+ol li::marker {
+  color: #17365D;
+  font-weight: bold;
+}
+
+li {
+  margin: 4px 0;
+}
+
+/* ---------- 11. ENCADRÉS INFORMATIFS ---------- */
+.info-box {
+  background-color: #E1EEF7;
+  border-left: 5px solid #009EDB;
+  padding: 15px 20px;
+  margin: 20px 0;
+  border-radius: 2px;
+}
+
+.warning-box {
+  background-color: #FFF4E1;
+  border-left: 5px solid #F59E0B;
+  padding: 15px 20px;
+  margin: 20px 0;
+}
+
+.alert-box {
+  background-color: #FDE8E8;
+  border-left: 5px solid #C8102E;
+  padding: 15px 20px;
+  margin: 20px 0;
+}
+
+/* ---------- 12. PIED DE PAGE ---------- */
+.footer {
+  margin-top: 50px;
+  padding-top: 20px;
+  border-top: 2px solid #009EDB;
+  color: #55606E;
+  font-size: 9pt;
+  text-align: center;
+}
+
+/* ---------- 13. ONGLETS (si .tabset) ---------- */
+.nav-tabs > li > a {
+  color: #17365D !important;
+  border-radius: 0 !important;
+}
+
+.nav-tabs > li.active > a {
+  background-color: #009EDB !important;
+  color: #ffffff !important;
+  border-color: #009EDB !important;
+}
+
+/* ---------- 14. IMPRESSION ---------- */
+@media print {
+  body {
+    font-size: 10pt;
+    padding: 0;
+  }
+  #TOC, .tocify {
+    display: none;
+  }
+  h1, h2 {
+    page-break-after: avoid;
+  }
+  table, figure {
+    page-break-inside: avoid;
+  }
+  a {
+    color: #333 !important;
+    text-decoration: none !important;
+  }
+}
+
+/* ---------- 15. PALETTE OFFICIELLE (variables utilitaires) ---------- */
+/*
+  Couleurs UN/WHO utilisées :
+  - Bleu UN principal       : #009EDB
+  - Bleu UN foncé           : #17365D
+  - Gris neutre             : #55606E
+  - Gris clair fond         : #F2F2F2
+  - Bleu très clair fond    : #F2F7FB / #E1EEF7
+  - Rouge UN (accent)       : #C8102E
+  - Orange alerte           : #F59E0B
+*/
